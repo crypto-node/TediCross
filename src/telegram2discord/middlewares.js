@@ -65,7 +65,12 @@ function createTextObjFromMessage(ctx, message) {
  *
  * @returns {String}	The reply text to display
  */
-function makeReplyText(replyTo, replyLength, maxReplyLines) {
+const makeReplyText = (replyTo, replyLength, maxReplyLines) => {
+	const countDoublePipes = R.tryCatch(
+		str => str.match(/\|\|/g).length,
+		R.always(0)
+	);
+
 	// Make the reply string
 	return R.compose(
 		// Add ellipsis if the text was cut
@@ -77,6 +82,18 @@ function makeReplyText(replyTo, replyLength, maxReplyLines) {
 			R.identity,
 			R.concat(R.__, "…")
 		),
+		// Handle spoilers (pairs of "||" in Discord)
+		R.ifElse(
+			// If one of a pair of "||" has been removed
+			quote => R.and(
+				countDoublePipes(quote, "||") % 2 === 1,
+				countDoublePipes(replyTo.text.raw) % 2 === 0
+			),
+			// Add one to the end
+			R.concat(R.__, "||"),
+			// Otherwise do nothing
+			R.identity
+		),
 		// Take only a number of lines
 		R.join("\n"),
 		R.slice(0, maxReplyLines),
@@ -84,7 +101,7 @@ function makeReplyText(replyTo, replyLength, maxReplyLines) {
 		// Take only a portion of the text
 		R.slice(0, replyLength),
 	)(replyTo.text.raw);
-}
+};
 
 /**
  * Makes a discord mention out of a username
@@ -200,7 +217,7 @@ function removeD2TBridges(ctx, next) {
 }
 
 /**
- * Removes bridges with the `ignoreCommand` flag from the bridge list
+ * Removes bridges with the `relayCommands` flag set to false from the bridge list
  *
  * @param {Object} ctx	The Telegraf context to use
  * @param {Object} ctx.tediCross	The TediCross object on the context
@@ -210,7 +227,7 @@ function removeD2TBridges(ctx, next) {
  * @returns {undefined}
  */
 function removeBridgesIgnoringCommands(ctx, next) {
-	ctx.tediCross.bridges = R.filter(R.path(["telegram", "ignoreCommands"]), ctx.tediCross.bridges);
+	ctx.tediCross.bridges = R.filter(R.path(["telegram", "relayCommands"]), ctx.tediCross.bridges);
 	next();
 }
 
@@ -260,20 +277,34 @@ function informThisIsPrivateBot(ctx, next) {
 			R.isEmpty,
 			R.path(["tediCross", "bridges"])
 		),
-		// Inform the user
-		ctx =>
-			ctx.reply(
-				"This is an instance of a [TediCross](https://github.com/TediCross/TediCross) bot, "
-				+ "bridging a chat in Telegram with one in Discord. "
-				+ "If you wish to use TediCross yourself, please download and create an instance.",
-				{
-					parse_mode: "markdown"
-				}
-			)
-				// Delete it again after a while
-				.then(sleepOneMinute)
-				.then(helpers.deleteMessage(ctx))
-				.catch(helpers.ignoreAlreadyDeletedError),
+		// Inform the user, if enough time has passed since last time
+		R.when(
+			// When there is no timer for the chat in the anti spam map
+			ctx => R.not(ctx.TediCross.antiInfoSpamSet.has(ctx.message.chat.id)),
+			// Inform the chat this is an instance of TediCross
+			ctx => {
+				// Update the anti spam set
+				ctx.TediCross.antiInfoSpamSet.add(ctx.message.chat.id);
+
+				// Send the reply
+				ctx.reply(
+					"This is an instance of a [TediCross](https://github.com/TediCross/TediCross) bot, "
+					+ "bridging a chat in Telegram with one in Discord. "
+					+ "If you wish to use TediCross yourself, please download and create an instance.",
+					{
+						parse_mode: "markdown"
+					}
+				)
+					.then(msg =>
+						// Delete it again after a while
+						sleepOneMinute()
+							.then(() => helpers.deleteMessage(ctx, msg))
+							.catch(helpers.ignoreAlreadyDeletedError)
+							// Remove it from the anti spam set again
+							.then(() => ctx.TediCross.antiInfoSpamSet.delete(ctx.message.chat.id))
+					);
+			}
+		),
 		// Otherwise go to next middleware
 		next
 	)(ctx);
@@ -483,12 +514,12 @@ function addPreparedObj(ctx, next) {
 
 	ctx.tediCross.prepared = R.map(
 		bridge => {
+			// Get the name of the sender of this message
+			const senderName = From.makeDisplayName(ctx.TediCross.settings.telegram.useFirstNameInsteadOfUsername, tc.from);
+
 			// Make the header
 			// WARNING! Butt-ugly code! If you see a nice way to clean this up, please do it
 			const header = (() => {
-				// Get the name of the sender of this message
-				const senderName = From.makeDisplayName(ctx.TediCross.settings.telegram.useFirstNameInsteadOfUsername, tc.from);
-
 				// Get the name of the original sender, if this is a forward
 				const originalSender = R.isNil(tc.forwardFrom)
 					? null
@@ -511,15 +542,7 @@ function addPreparedObj(ctx, next) {
 					)(tc.replyTo)
 				;
 
-				// The original text, if this is a reply
-				const repliedToText = R.isNil(tc.replyTo)
-					? null
-					: (ctx.TediCross.settings.discord.displayTelegramReplies === "inline"
-						? makeReplyText(tc.replyTo, ctx.TediCross.settings.discord.replyLength, ctx.TediCross.settings.discord.maxReplyLines)
-						: null
-					)
-				;
-
+				// Build the header
 				let header = "";
 				if (bridge.telegram.sendUsernames) {
 					if (!R.isNil(tc.forwardFrom)) {
@@ -527,13 +550,7 @@ function addPreparedObj(ctx, next) {
 						header = `**${originalSender}** (forwarded by **${senderName}**)`;
 					} else if (!R.isNil(tc.replyTo)) {
 						// Reply
-						header = `**${senderName}** (in reply to **${repliedToName}**`;
-
-						if (!R.isNil(repliedToText)) {
-							header = `${header}: _${R.replace(/\n/g, " ", repliedToText)}_)`;
-						} else {
-							header = `${header})`;
-						}
+						header = `**${senderName}** (in reply to **${repliedToName}**)`;
 					} else {
 						// Ordinary message
 						header = `**${senderName}**`;
@@ -544,13 +561,7 @@ function addPreparedObj(ctx, next) {
 						header = `(forward from **${originalSender}**)`;
 					} else if (!R.isNil(tc.replyTo)) {
 						// Reply
-						header = `(in reply to **${repliedToName}**`;
-
-						if (!R.isNil(repliedToText)) {
-							header = `${header}: _${R.replace(/\n/g, " ", repliedToText)}_)`;
-						} else {
-							header = `${header})`;
-						}
+						header = `(in reply to **${repliedToName}**)`;
 					} else {
 						// Ordinary message
 						header = "";
@@ -560,18 +571,13 @@ function addPreparedObj(ctx, next) {
 				return header;
 			})();
 
-			// Handle embed replies
-			const embed = R.ifElse(
-				tc => !R.isNil(tc.replyTo) && ctx.TediCross.settings.discord.displayTelegramReplies === "embed",
-				tc => {
-					// Make the text
-					const replyText = handleEntities(tc.replyTo.text.raw, tc.replyTo.text.entities, ctx.TediCross.dcBot, bridge);
-
-					return new Discord.RichEmbed({
-						// Discord will not accept embeds with more than 2048 characters
-						description: R.slice(0, 2048, replyText)
-					});
-				},
+			// Handle blockquote replies
+			const replyQuote = R.ifElse(
+				tc => !R.isNil(tc.replyTo),
+				R.compose(
+					R.replace(/^/gm, "> "),
+					tc => makeReplyText(tc.replyTo, ctx.TediCross.settings.discord.replyLength, ctx.TediCross.settings.discord.maxReplyLines),
+				),
 				R.always(undefined)
 			)(tc);
 
@@ -586,12 +592,20 @@ function addPreparedObj(ctx, next) {
 			)(tc);
 
 			// Make the text to send
-			const text = handleEntities(tc.text.raw, tc.text.entities, ctx.TediCross.dcBot, bridge);
+			const text = (() => {
+				let text = handleEntities(tc.text.raw, tc.text.entities, ctx.TediCross.dcBot, bridge);
+
+				if (!R.isNil(replyQuote)) {
+					text = replyQuote + "\n" + text;
+				}
+
+				return text;
+			})();
 
 			return {
 				bridge,
 				header,
-				embed,
+				senderName,
 				file,
 				text
 			};

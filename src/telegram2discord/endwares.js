@@ -46,7 +46,7 @@ const createMessageHandler = R.curry((func, ctx) => {
  *
  * @returns {undefined}
  */
-function chatinfo(ctx) {
+const chatinfo = ctx => {
 	// Reply with the info
 	ctx.reply(`chatID: ${ctx.tediCross.message.chat.id}`)
 		// Wait some time
@@ -59,7 +59,7 @@ function chatinfo(ctx) {
 			ctx.deleteMessage()
 		]))
 		.catch(helpers.ignoreAlreadyDeletedError);
-}
+};
 
 /**
  * Handles users joining chats
@@ -80,8 +80,10 @@ const newChatMembers = createMessageHandler((ctx, bridge) =>
 		const text = `**${from.firstName} (${R.defaultTo("No username", from.username)})** joined the Telegram side of the chat`;
 
 		// Pass it on
-		ctx.TediCross.dcBot.channels.get(bridge.discord.channelId)
-			.send(text);
+		ctx.TediCross.dcBot.ready.then(() => 
+			helpers.getDiscordChannel(ctx, bridge)
+				.send(text)
+		);
 	})(ctx.tediCross.message.new_chat_members)
 );
 
@@ -102,8 +104,10 @@ const leftChatMember = createMessageHandler((ctx, bridge) => {
 	const text = `**${from.firstName} (${R.defaultTo("No username", from.username)})** left the Telegram side of the chat`;
 
 	// Pass it on
-	ctx.TediCross.dcBot.channels.get(bridge.discord.channelId)
-		.send(text);
+	ctx.TediCross.dcBot.ready.then(() => 
+		helpers.getDiscordChannel(ctx, bridge)
+			.send(text)
+	);
 });
 
 /**
@@ -115,34 +119,38 @@ const leftChatMember = createMessageHandler((ctx, bridge) => {
  *
  * @returns {undefined}
  */
-function relayMessage(ctx) {
+const relayMessage = ctx =>
 	R.forEach(async prepared => {
-		// Get the channel to send to
-		const channel = ctx.TediCross.dcBot.channels.get(prepared.bridge.discord.channelId);
-
-		// Make the header
-		let header = prepared.header;
-
-		// Handle embed replies
-		if (prepared.embed) {
-			await channel.send(header, { embed: prepared.embed });
-			header = "";
-		}
-
 		// Discord doesn't handle messages longer than 2000 characters. Split it up into chunks that big
-		const messageText = header + "\n" + prepared.text;
-		const chunks = R.splitEvery(2000, messageText);
+		const messageText = prepared.header + "\n" + prepared.text;
+		let chunks = R.splitEvery(2000, messageText);
 
-		// Send them in serial, with the attachment first, if there is one
-		let dcMessage = await channel.send(R.head(chunks), { file: prepared.file });
-		if (R.length(chunks) > 1) {
-			dcMessage = await R.reduce((p, chunk) => p.then(() => channel.send(chunk)), Promise.resolve(), R.tail(chunks));
+		// Wait for the Discord bot to become ready
+		await ctx.TediCross.dcBot.ready;
+
+		// Get the channel to send to
+		const channel = helpers.getDiscordChannel(ctx, prepared.bridge);
+
+		let dcMessage = null;
+		// Send the attachment first, if there is one
+		if (!R.isNil(prepared.file)) {
+			try {
+				dcMessage = await channel.send(R.head(chunks), { file: prepared.file });
+				chunks = R.tail(chunks);
+			} catch (err) {
+				if (err.message === "Request entity too large") {
+					dcMessage = await channel.send(`***${prepared.senderName}** on Telegram sent a file, but it was too large for Discord. If you want it, ask them to send it some other way*`);
+				} else {
+					throw err;
+				}
+			}
 		}
+		// Send the rest in serial
+		dcMessage = await R.reduce((p, chunk) => p.then(() => channel.send(chunk)), Promise.resolve(dcMessage), chunks);
 
 		// Make the mapping so future edits can work XXX Only the last chunk is considered
 		ctx.TediCross.messageMap.insert(MessageMap.TELEGRAM_TO_DISCORD, prepared.bridge, ctx.tediCross.messageId, dcMessage.id);
 	})(ctx.tediCross.prepared);
-}
 
 /**
  * Handles message edits
@@ -158,9 +166,11 @@ const handleEdits = createMessageHandler(async (ctx, bridge) => {
 		// Find the ID of this message on Discord
 		const [dcMessageId] = ctx.TediCross.messageMap.getCorresponding(MessageMap.TELEGRAM_TO_DISCORD, bridge, tgMessage.message_id);
 
+		// Wait for the Discord bot to become ready
+		await ctx.TediCross.dcBot.ready;
+
 		// Get the messages from Discord
-		const dcMessage = await ctx.TediCross.dcBot.channels
-			.get(bridge.discord.channelId)
+		const dcMessage = await helpers.getDiscordChannel(ctx, bridge)
 			.fetchMessage(dcMessageId);
 
 		R.forEach(async prepared => {

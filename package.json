@@ -1,6 +1,6 @@
 {
   "name": "tedicross",
-  "version": "0.9.7",
+  "version": "0.9.13",
   "description": "Better DiteCross",
   "license": "MIT",
   "repository": {
@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node main.js",
+    "start-dev": "nodemon main.js -i data/",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -18,12 +19,13 @@
     "moment": "^2.24.0",
     "ramda": "^0.26.1",
     "request": "^2.88.0",
-    "simple-markdown": "^0.4.4",
+    "simple-markdown": "^0.7.2",
     "telegraf": "^3.32.0",
     "yargs": "^13.3.0"
   },
   "devDependencies": {
-    "eslint": "^5.16.0"
+    "eslint": "^5.16.0",
+    "nodemon": "^2.0.2"
   },
   "eslintConfig": {
     "parserOptions": {
