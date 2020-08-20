@@ -72,10 +72,12 @@ As mentioned in the step by step installation guide, there is a settings file. H
 	* `telegram.relayLeaveMessages`: Whether or not to relay messages to Discord about people leaving the Telegram chat
 	* `telegram.sendUsernames`: Whether or not to send the sender's name with the messages to Discord
 	* `telegram.relayCommands`: If set to `false`, messages starting with a `/` are not relayed to Discord
+	* `telegram.crossDeleteOnTelegram`: Whether or not to also delete the corresponding message on Discord when one is deleted on Telegram. **NOTE**: See FAQ about deleting messages.
 	* `discord.channelId`: ID of the channel the Discord end of the bridge is in. See step 11 on how to aquire it
 	* `discord.relayJoinMessages`: Whether or not to relay messages to Telegram about people joining the Discord chat
 	* `discord.relayLeaveMessages`: Whether or not to relay messages to Telegram about people leaving the Discord chat
 	* `discord.sendUsernames`: Whether or not to send the sender's name with the messages to Telegram
+	* `discord.crossDeleteOnTelegram`: Whether or not to also delete the corresponding message on Telegram when one is deleted in Discord
 
 The available settings will occasionally change. The bot takes care of this automatically
 
@@ -96,10 +98,10 @@ Not much at all. Almost all the commands are written in the installation guide e
 
 This likely means you are using Ubuntu or another Debian based Linux distro. You get node version 4 when you do `apt-get install nodejs`, and it is called `nodejs` instead of `node`.
 
-TediCross requires node 8 or higher to run. To get node 8 on an Ubuntu machine, run the following two commands:
+TediCross requires node 12 or higher to run. To get node 12 on a debian based system (including Ubuntu), run the following two commands:
 
 ```
-curl -sL https://deb.nodesource.com/setup_8.x | sudo -E bash -
+curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
@@ -120,8 +122,10 @@ See https://core.telegram.org/bots/faq#why-doesn-39t-my-bot-see-messages-from-ot
 ### Deleting a message in Telegram does not delete it in Discord
 
 Telegram bots are unfortunately completely unable to detect when a message is deleted. There is no way to implement T2D cross-deletion until Telegram implements this.
+**NOTE**: A partial solution to this has been implemented. When a message on Telegram is edited to become just a single dot (`.`), TediCross will delete it both on Telegram and on Discord.
 
-Deleting messages D2T works.
+Deleting messages D2T works as expected
+
 
 ### When running `npm install`, it complains about missing dependencies?
 
